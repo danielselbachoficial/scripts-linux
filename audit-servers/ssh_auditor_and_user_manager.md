@@ -1,4 +1,4 @@
-# SSH Auditor e Hardening - Script Python
+# SSH Auditor e Hardening
 
 ## 📋 RESUMO EXECUTIVO
 
