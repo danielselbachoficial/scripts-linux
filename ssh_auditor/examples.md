@@ -10,7 +10,7 @@ sudo python3 ssh_auditor_v2.py --audit --verbose
 
 **Saída:**
 
-`
+`bash
 ================================================================================
 
 RELATÓRIO DE AUDITORIA SSH - ENTERPRISE EDITION
@@ -52,7 +52,6 @@ CATEGORIA: SSH_CONFIG
    recommended: yes
 
    comment: CIS 5.2.7: Chaves públicas são o método recomendado
-...
 `
 
 
@@ -65,7 +64,7 @@ sudo python3 ssh_auditor_v2.py --fix --dry-run
 
 
 **Saída:**
-`
+`bash
 [2025-12-24 19:05:00] [INFO] 🔍 MODO DRY-RUN ATIVADO
 
 [2025-12-24 19:05:00] [INFO] Iniciando correção de configurações SSH...
@@ -95,7 +94,7 @@ sudo python3 ssh_auditor_v2.py --fix
 
 **Saída:**
 
-`
+`bash
 [2025-12-24 19:10:00] [INFO] Iniciando correção de configurações SSH...
 
 [2025-12-24 19:10:00] [INFO] Backup criado: /var/backups/ssh_auditor/sshd_config.bak_20251224_191000
@@ -123,7 +122,7 @@ sudo python3 ssh_auditor_v2.py --create-user admin_backup
 
 **Saída:**
 
-`
+`bash
 [2025-12-24 19:15:00] [INFO] Usuário 'admin_backup' criado
 
 [2025-12-24 19:15:00] [INFO] Senha definida para 'admin_backup'
@@ -147,5 +146,4 @@ Password: K7#mR9@pL2$vN4&qW8
 ⚠️  ATENÇÃO: Salve esta senha AGORA. Ela não será exibida novamente.
 
 ================================================================================
-
 `
