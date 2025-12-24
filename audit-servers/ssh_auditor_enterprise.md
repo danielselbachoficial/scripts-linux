@@ -24,7 +24,7 @@ Este documento apresenta um script Python robusto para auditoria, hardening e ge
 
 ## 1. Funcionalidades
 
-O script `ssh_auditor_and_user_manager.py` oferece as seguintes funcionalidades:
+O script `ssh_auditor_enterprise.py` oferece as seguintes funcionalidades:
 
 *   **Auditoria de Segurança SSH**:
     *   Verifica mais de 30 parâmetros críticos no `/etc/ssh/sshd_config`.
@@ -65,7 +65,7 @@ Siga estes passos para instalar e configurar o script em seu servidor Linux.
 Crie o arquivo do script e cole o conteúdo fornecido acima.
 
 ```bash
-sudo nano /usr/local/bin/ssh_auditor_and_user_manager.py
+sudo nano /usr/local/bin/ssh_auditor_enterprise.py
 ```
 
 #### Script ####
