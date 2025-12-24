@@ -2,7 +2,7 @@
 
 **Exemplo 1: Auditoria Inicial**
 
-```bash
+`bash
 sudo python3 ssh_auditor_v2.py --audit --verbose
 `
 
