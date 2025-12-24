@@ -1,7 +1,8 @@
 📄 **Licença**
-Este projeto está licenciado sob a Licença MIT - veja o arquivo LICENSE para detalhes.
-`
 
+Este projeto está licenciado sob a Licença MIT - veja o arquivo LICENSE para detalhes.
+
+`
 **MIT License**
 
 Copyright (c) 2025 Daniel Selbach Figueiró
