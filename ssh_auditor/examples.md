@@ -50,7 +50,7 @@ CATEGORIA: SSH_CONFIG
    recommended: yes
 
    comment: CIS 5.2.7: Chaves públicas são o método recomendado
-`
+```
 
 
 ---
@@ -75,7 +75,7 @@ sudo python3 ssh_auditor_v2.py --fix --dry-run
 [2025-12-24 19:05:00] [INFO] Dry-Run: 24 parâmetros seriam atualizados
 
 [2025-12-24 19:05:00] [INFO] Dry-Run: 0 permissões seriam corrigidas
-`
+```
 
 
 ---
@@ -108,7 +108,7 @@ sudo python3 ssh_auditor_v2.py --fix
 [2025-12-24 19:10:02] [INFO] ✅ Serviço SSH reiniciado com sucesso
 
 [2025-12-24 19:10:02] [INFO] ✅ PROCESSO CONCLUÍDO COM SUCESSO
-`
+```
 
 
 ---
@@ -147,4 +147,4 @@ Password: K7#mR9@pL2$vN4&qW8
 ⚠️  ATENÇÃO: Salve esta senha AGORA. Ela não será exibida novamente.
 
 ================================================================================
-`
+```
