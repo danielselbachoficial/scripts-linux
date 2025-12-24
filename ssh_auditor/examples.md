@@ -2,7 +2,7 @@
 
 **Exemplo 1: Auditoria Inicial**
 
-`bash
+`
 sudo python3 ssh_auditor_v2.py --audit --verbose
 `
 
@@ -113,7 +113,7 @@ sudo python3 ssh_auditor_v2.py --fix
 
 **Exemplo 4: Criação de Usuário**
 
-`bash
+`
 sudo python3 ssh_auditor_v2.py --create-user admin_backup
 `
 
