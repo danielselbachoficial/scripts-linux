@@ -49,6 +49,3 @@ CATEGORIA: SSH_CONFIG
 
    comment: CIS 5.2.7: Chaves públicas são o método recomendado
 ```
-
-
----
