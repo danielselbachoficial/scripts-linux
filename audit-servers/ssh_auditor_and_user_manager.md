@@ -4,12 +4,6 @@
 
 Este documento apresenta um script Python robusto para auditoria, hardening e gerenciamento de usuários em servidores Linux, focado na segurança do SSH. Ele automatiza a detecção e correção de configurações de segurança, garantindo conformidade com as melhores práticas e a LGPD.
 
-**Bugs Corrigidos:**
-*   **`AttributeError: module 'shutil' has no attribute 'chown_by_name'`**: Corrigido utilizando `os.getpwuid` e `os.getgrgid` para obter nomes de proprietário/grupo.
-*   **`AttributeError: 'Namespace' object has no attribute 'dry'`**: Corrigido o acesso aos argumentos do `argparse` (`args.dry_run`, `args.create_user`).
-*   **`KeyboardInterrupt` durante `passwd`**: Substituído o comando interativo `passwd` por `chpasswd` para automação segura da definição de senha, com geração automática de senha forte.
-*   **Escolha do nome do usuário**: A funcionalidade `--create-user` agora aceita o nome do usuário como argumento.
-
 ## 📚 ÍNDICE
 
 *   [1. Funcionalidades](#1-funcionalidades)
@@ -56,36 +50,17 @@ O script `ssh_auditor_and_user_manager.py` oferece as seguintes funcionalidades:
 *   **Interface de Linha de Comando (CLI)**:
     *   Utiliza `argparse` para uma interface de usuário amigável e flexível.
 
-## 2. Bugs Corrigidos e Melhorias
-
-Esta versão do script aborda e corrige os seguintes problemas:
-
-*   **`AttributeError: module 'shutil' has no attribute 'chown_by_name'`**:
-    *   **Causa**: A função `shutil.chown_by_name` não existe no módulo `shutil`.
-    *   **Correção**: Substituído pelo uso de `os.stat` para obter UID/GID e `pwd.getpwuid`/`grp.getgrgid` para obter os nomes de usuário/grupo, e `shutil.chown` para aplicar as correções de proprietário/grupo.
-*   **`AttributeError: 'Namespace' object has no attribute 'dry'` (e similar para `create-user`)**:
-    *   **Causa**: O `argparse` converte hífens em underscores para atributos do objeto `args`.
-    *   **Correção**: Todas as referências a `args.dry-run` e `args.create-user` foram atualizadas para `args.dry_run` e `args.create_user`, respectivamente.
-*   **`KeyboardInterrupt` durante `passwd` na criação de usuário**:
-    *   **Causa**: O comando `passwd` é interativo e não funciona bem em scripts automatizados quando a entrada não é fornecida.
-    *   **Correção**: Implementada a geração automática de uma senha segura usando `random` e `string`, e a definição da senha é feita de forma não interativa usando `chpasswd`. A senha gerada é exibida uma única vez para o administrador.
-*   **Escolha do nome do usuário**:
-    *   A opção `--create-user` agora aceita o nome do usuário como um argumento, permitindo ao administrador escolher o nome do novo usuário.
-*   **Robustez e Tratamento de Erros**:
-    *   Melhorias no tratamento de erros para comandos `subprocess`, garantindo que falhas sejam logadas e tratadas adequadamente.
-    *   Validação básica do nome de usuário para `create_sudo_user`.
-
-## 3. Instalação e Configuração
+## 2. Instalação e Configuração
 
 Siga estes passos para instalar e configurar o script em seu servidor Linux.
 
-### 3.1. Pré-requisitos
+### 2.1. Pré-requisitos
 
 *   Python 3.x instalado.
 *   Privilégios de `root` para executar o script.
 *   Conexão com a internet para instalação de pacotes (Fail2ban).
 
-### 3.2. Criar o Script
+### 2.2. Criar o Script
 
 Crie o arquivo do script e cole o conteúdo fornecido acima.
 
