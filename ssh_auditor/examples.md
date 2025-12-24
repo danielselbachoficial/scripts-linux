@@ -55,7 +55,7 @@ CATEGORIA: SSH_CONFIG
 `
 
 
-
+---
 **Exemplo 2: Dry-Run**
 `bash
 sudo python3 ssh_auditor_v2.py --fix --dry-run
@@ -79,7 +79,7 @@ sudo python3 ssh_auditor_v2.py --fix --dry-run
 `
 
 
-
+---
 **Exemplo 3: Aplicação de Correções**
 
 
@@ -111,7 +111,7 @@ sudo python3 ssh_auditor_v2.py --fix
 `
 
 
-
+---
 **Exemplo 4: Criação de Usuário**
 
 `bash
