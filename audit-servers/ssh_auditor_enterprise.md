@@ -7,18 +7,17 @@ Este documento apresenta um script Python robusto para auditoria, hardening e ge
 ## 📚 ÍNDICE
 
 *   [1. Funcionalidades](#1-funcionalidades)
-*   [2. Bugs Corrigidos e Melhorias](#2-bugs-corrigidos-e-melhorias)
-*   [3. Instalação e Configuração](#3-instalação-e-configuração)
-*   [4. Exemplos de Uso](#4-exemplos-de-uso)
-    *   [4.1. Auditoria](#41-auditoria)
-    *   [4.2. Simulação de Correções (Dry-Run)](#42-simulação-de-correções-dry-run)
-    *   [4.3. Aplicação de Correções](#43-aplicação-de-correções)
-    *   [4.4. Criação de Novo Usuário Sudo](#44-criação-de-novo-usuário-sudo)
-    *   [4.5. Instalação e Configuração do Fail2ban](#45-instalação-e-configuração-do-fail2ban)
-*   [5. Detalhes do Relatório de Auditoria](#5-detalhes-do-relatório-de-auditoria)
-*   [6. Conformidade com LGPD e Boas Práticas](#6-conformidade-com-lgpd-e-boas-práticas)
-*   [7. Troubleshooting](#7-troubleshooting)
-*   [8. Contribuição e Licença](#8-contribuição-e-licença)
+*   [2. Instalação e Configuração](#3-instalação-e-configuração)
+*   [3. Exemplos de Uso](#4-exemplos-de-uso)
+    *   [3.1. Auditoria](#41-auditoria)
+    *   [3.2. Simulação de Correções (Dry-Run)](#42-simulação-de-correções-dry-run)
+    *   [3.3. Aplicação de Correções](#43-aplicação-de-correções)
+    *   [3.4. Criação de Novo Usuário Sudo](#44-criação-de-novo-usuário-sudo)
+    *   [3.5. Instalação e Configuração do Fail2ban](#45-instalação-e-configuração-do-fail2ban)
+*   [4. Detalhes do Relatório de Auditoria](#5-detalhes-do-relatório-de-auditoria)
+*   [5. Conformidade com LGPD e Boas Práticas](#6-conformidade-com-lgpd-e-boas-práticas)
+*   [6. Troubleshooting](#7-troubleshooting)
+*   [7. Contribuição e Licença](#8-contribuição-e-licença)
 
 ---
 
