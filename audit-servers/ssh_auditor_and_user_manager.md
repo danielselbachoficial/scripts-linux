@@ -71,8 +71,17 @@ sudo nano /usr/local/bin/ssh_auditor_and_user_manager.py
 #### Script ####
 ```bash
 #!/usr/bin/env python3
+"""
+SSH Auditor and Hardening Tool - Enterprise Edition
+Conformidade: CIS Benchmark 5.2.x, NIST SP 800-123, LGPD
+
+ATENÇÃO: Este script modifica configurações críticas de SSH.
+         Execute SEMPRE em ambiente de teste antes de produção.
+         Mantenha acesso alternativo (console físico/IPMI/KVM) disponível.
+"""
 
 import os
+import sys
 import subprocess
 import logging
 import argparse
@@ -80,407 +89,781 @@ import shutil
 import datetime
 import random
 import string
-import crypt
-import pwd # Para os.getpwuid
-import grp # Para os.getgrgid
+import json
+import time
+import re
+import pwd
+import grp
+from pathlib import Path
+from typing import Dict, List, Tuple, Optional
 
-# --- Configurações de Log ---
+# --- Configurações Globais ---
+VERSION = "2.0.2-enterprise"
 LOG_FILE = "/var/log/ssh_auditor.log"
 BACKUP_DIR = "/var/backups/ssh_auditor"
 SSHD_CONFIG = "/etc/ssh/sshd_config"
+SSH_DIR = "/etc/ssh"
 
-# --- Configuração de Logging ---
-def setup_logging():
-    logging.basicConfig(
-        level=logging.INFO,
-        format='[%(asctime)s] [%(levelname)s] %(message)s',
-        handlers=[
-            logging.FileHandler(LOG_FILE),
-            logging.StreamHandler()
-        ]
+# Conformidade CIS Benchmark 5.2.x
+CIS_COMPLIANT_CONFIG = {
+    'PermitRootLogin': ('no', 'CRITICAL', "CIS 5.2.10: Root login direto é vetor de ataque primário"),
+    'PasswordAuthentication': ('no', 'HIGH', "CIS 5.2.8: Autenticação por senha é vulnerável a brute-force"),
+    'PubkeyAuthentication': ('yes', 'HIGH', "CIS 5.2.7: Chaves públicas são o método recomendado"),
+    'PermitEmptyPasswords': ('no', 'CRITICAL', "CIS 5.2.9: Senhas vazias são falha crítica"),
+    'X11Forwarding': ('no', 'MEDIUM', "CIS 5.2.6: X11 forwarding aumenta superfície de ataque"),
+    'MaxAuthTries': ('3', 'MEDIUM', "CIS 5.2.5: Limitar tentativas de autenticação"),
+    'IgnoreRhosts': ('yes', 'MEDIUM', "CIS 5.2.11: Ignorar arquivos .rhosts legados"),
+    'HostbasedAuthentication': ('no', 'MEDIUM', "CIS 5.2.12: Desabilitar autenticação baseada em host"),
+    'PermitUserEnvironment': ('no', 'MEDIUM', "CIS 5.2.13: Prevenir manipulação de ambiente"),
+    'LoginGraceTime': ('60', 'LOW', "CIS 5.2.16: Timeout para login (60s padrão CIS)"),
+    'ClientAliveInterval': ('300', 'LOW', "CIS 5.2.17: Keepalive a cada 5 minutos"),
+    'ClientAliveCountMax': ('0', 'LOW', "CIS 5.2.18: Desconectar após timeout (0 = imediato)"),
+    'LogLevel': ('VERBOSE', 'MEDIUM', "CIS 5.2.4: Logging detalhado para auditoria"),
+    'MaxStartups': ('10:30:60', 'MEDIUM', "CIS 5.2.21: Limitar conexões simultâneas (DoS protection)"),
+    'MaxSessions': ('10', 'LOW', "CIS 5.2.22: Limitar sessões por conexão"),
+    'UsePAM': ('yes', 'LOW', "CIS 5.2.19: Habilitar PAM para autenticação centralizada"),
+    'AllowTcpForwarding': ('no', 'MEDIUM', "Desabilitar TCP forwarding se não necessário"),
+    'AllowAgentForwarding': ('no', 'MEDIUM', "Desabilitar agent forwarding se não necessário"),
+    'PermitTunnel': ('no', 'MEDIUM', "Desabilitar tunneling se não necessário"),
+    'Banner': ('/etc/issue.net', 'LOW', "CIS 5.2.15: Exibir banner legal"),
+    'Ciphers': ('chacha20-poly1305@openssh.com,aes256-gcm@openssh.com,aes128-gcm@openssh.com,aes256-ctr,aes192-ctr,aes128-ctr', 'HIGH', "Cifras AEAD + CTR mode (FIPS 140-2 compatível)"),
+    'MACs': ('hmac-sha2-512-etm@openssh.com,hmac-sha2-256-etm@openssh.com,hmac-sha2-512,hmac-sha2-256', 'HIGH', "MACs SHA-2 com Encrypt-then-MAC + fallback FIPS"),
+    'KexAlgorithms': ('sntrup761x25519-sha512@openssh.com,curve25519-sha256,curve25519-sha256@libssh.org,diffie-hellman-group16-sha512,diffie-hellman-group18-sha512,diffie-hellman-group14-sha256', 'HIGH', "KEX pós-quântico + curvas elípticas + DH forte"),
+}
+
+# --- Configuração de Logging Estruturado ---
+class JSONFormatter(logging.Formatter):
+    """Formatter para logs estruturados em JSON (SIEM-ready)"""
+    def format(self, record):
+        log_data = {
+            'timestamp': datetime.datetime.now(datetime.timezone.utc).isoformat(),
+            'level': record.levelname,
+            'message': record.getMessage(),
+            'module': record.module,
+            'function': record.funcName,
+            'line': record.lineno,
+        }
+        if hasattr(record, 'event_type'):
+            log_data['event_type'] = record.event_type
+        if hasattr(record, 'details'):
+            log_data['details'] = record.details
+        return json.dumps(log_data)
+
+def setup_logging(verbose: bool = False):
+    """Configura logging dual: JSON para arquivo, human-readable para console"""
+    os.makedirs(os.path.dirname(LOG_FILE), exist_ok=True)
+    
+    file_handler = logging.FileHandler(LOG_FILE)
+    file_handler.setFormatter(JSONFormatter())
+    file_handler.setLevel(logging.DEBUG)
+    
+    console_handler = logging.StreamHandler()
+    console_formatter = logging.Formatter(
+        '[%(asctime)s] [%(levelname)s] %(message)s',
+        datefmt='%Y-%m-%d %H:%M:%S'
     )
+    console_handler.setFormatter(console_formatter)
+    console_handler.setLevel(logging.DEBUG if verbose else logging.INFO)
+    
+    logger = logging.getLogger()
+    logger.setLevel(logging.DEBUG)
+    logger.addHandler(file_handler)
+    logger.addHandler(console_handler)
+
+def log_event(event_type: str, message: str, details: dict = None, level: str = 'INFO'):
+    """Log estruturado para eventos de auditoria/hardening"""
+    logger = logging.getLogger()
+    log_level = getattr(logging, level.upper())
+    
+    extra = {'event_type': event_type}
+    if details:
+        extra['details'] = details
+    
+    logger.log(log_level, message, extra=extra)
 
 # --- Funções Auxiliares ---
-def _run_command(command, check=True, capture_output=True, text=True, **kwargs):
-    """Executa um comando shell e retorna o resultado."""
-    logging.debug(f"Executando comando: {' '.join(command)}")
+def run_command(command: List[str], check: bool = True, input_data: str = None, 
+                timeout: int = 30) -> subprocess.CompletedProcess:
+    """Executa comando com timeout e tratamento robusto de erros"""
+    logging.debug(f"Executando: {' '.join(command)}")
     try:
-        result = subprocess.run(command, check=check, capture_output=capture_output, text=text, **kwargs)
-        if result.returncode != 0:
-            logging.error(f"Comando falhou: {' '.join(command)}. Erro: {result.stderr.strip()}")
+        result = subprocess.run(
+            command,
+            check=check,
+            capture_output=True,
+            text=True,
+            input=input_data,
+            timeout=timeout
+        )
         return result
-    except subprocess.CalledProcessError as e:
-        logging.error(f"Erro ao executar comando: {e}. Saída: {e.stderr.strip()}")
+    except subprocess.TimeoutExpired:
+        logging.error(f"Timeout ao executar: {' '.join(command)}")
         raise
+    except subprocess.CalledProcessError as e:
+        logging.error(f"Comando falhou: {' '.join(command)}\nErro: {e.stderr.strip()}")
+        if check:
+            raise
+        return e
     except FileNotFoundError:
-        logging.error(f"Comando não encontrado: {command[0]}. Verifique se está instalado e no PATH.")
+        logging.error(f"Comando não encontrado: {command[0]}")
         raise
 
-def _backup_config(filepath):
-    """Cria um backup do arquivo de configuração."""
+def detect_distro() -> str:
+    """Detecta família da distribuição Linux"""
+    try:
+        with open('/etc/os-release', 'r') as f:
+            content = f.read().lower()
+            if any(x in content for x in ['debian', 'ubuntu']):
+                return 'debian'
+            elif any(x in content for x in ['rhel', 'centos', 'rocky', 'alma', 'fedora']):
+                return 'rhel'
+            elif 'alpine' in content:
+                return 'alpine'
+    except FileNotFoundError:
+        pass
+    
+    if shutil.which('apt'):
+        return 'debian'
+    elif shutil.which('yum') or shutil.which('dnf'):
+        return 'rhel'
+    
+    return 'unknown'
+
+def get_sftp_server_path() -> str:
+    """Retorna path correto do sftp-server baseado na distro"""
+    distro = detect_distro()
+    
+    paths = {
+        'debian': '/usr/lib/openssh/sftp-server',
+        'rhel': '/usr/libexec/openssh/sftp-server',
+        'alpine': '/usr/lib/ssh/sftp-server',
+    }
+    
+    if distro in paths and os.path.exists(paths[distro]):
+        return paths[distro]
+    
+    for path in paths.values():
+        if os.path.exists(path):
+            return path
+    
+    result = run_command(['which', 'sftp-server'], check=False)
+    if result.returncode == 0:
+        return result.stdout.strip()
+    
+    logging.warning("sftp-server não encontrado, usando path Debian como fallback")
+    return paths['debian']
+
+def backup_config(filepath: str) -> Optional[str]:
+    """Cria backup timestampado do arquivo de configuração"""
     timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
     backup_path = os.path.join(BACKUP_DIR, f"{os.path.basename(filepath)}.bak_{timestamp}")
+    
     try:
         os.makedirs(BACKUP_DIR, exist_ok=True)
         shutil.copy2(filepath, backup_path)
-        logging.info(f"Backup de '{filepath}' criado em '{backup_path}'")
+        
+        log_event('backup_created', f"Backup criado: {backup_path}", {
+            'original_file': filepath,
+            'backup_file': backup_path
+        })
         return backup_path
     except Exception as e:
         logging.error(f"Falha ao criar backup de '{filepath}': {e}")
         return None
 
-def _restart_ssh():
-    """Reinicia o serviço SSH e verifica seu status."""
-    logging.info("Reiniciando serviço SSH...")
+def restore_backup(backup_path: str, original_path: str) -> bool:
+    """Restaura arquivo de backup"""
     try:
-        _run_command(['systemctl', 'restart', 'sshd'])
-        status = _run_command(['systemctl', 'is-active', 'sshd'], check=False, capture_output=True).stdout.strip()
-        if status == 'active':
-            logging.info("Serviço SSH reiniciado e ativo.")
-            return True
-        else:
-            logging.error(f"Serviço SSH não está ativo após reiniciar. Status: {status}")
-            return False
-    except Exception as e:
-        logging.error(f"Erro ao reiniciar serviço SSH: {e}")
-        return False
-
-def _generate_secure_password(length=16):
-    """Gera uma senha segura e aleatória."""
-    characters = string.ascii_letters + string.digits + string.punctuation
-    password = ''.join(random.choice(characters) for i in range(length))
-    return password
-
-# --- Auditoria de Configurações SSH ---
-def audit_ssh_config():
-    """Audita as configurações do sshd_config."""
-    issues = []
-    config_lines = []
-    try:
-        with open(SSHD_CONFIG, 'r') as f:
-            config_lines = f.readlines()
-    except FileNotFoundError:
-        issues.append(f"❌ [FALHA] Arquivo '{SSHD_CONFIG}' não encontrado.")
-        return issues
-    except Exception as e:
-        issues.append(f"❌ [FALHA] Erro ao ler '{SSHD_CONFIG}': {e}")
-        return issues
-
-    # Dicionário de configurações recomendadas
-    # (Parâmetro, Valor Recomendado, Nível de Risco, Comentário)
-    recommended_config = {
-        'PermitRootLogin': ('no', 'FALHA', "Acesso root direto via SSH é uma grande falha de segurança."),
-        'PasswordAuthentication': ('no', 'AVISO', "Desabilitar autenticação por senha e usar chaves SSH."),
-        'PubkeyAuthentication': ('yes', 'AVISO', "Habilitar autenticação por chave pública."),
-        'PermitEmptyPasswords': ('no', 'FALHA', "Senhas vazias são uma falha de segurança crítica."),
-        'Protocol': ('2', 'AVISO', "Usar apenas o protocolo SSHv2."),
-        'X11Forwarding': ('no', 'FALHA', "Desabilitar X11 forwarding se não for necessário."),
-        'AllowTcpForwarding': ('no', 'AVISO', "Desabilitar TCP forwarding se não for necessário."),
-        'AllowAgentForwarding': ('no', 'AVISO', "Desabilitar agent forwarding se não for necessário."),
-        'MaxAuthTries': ('3', 'AVISO', "Limitar tentativas de autenticação para prevenir brute force."),
-        'LoginGraceTime': ('30', 'AVISO', "Tempo limite para login."),
-        'ClientAliveInterval': ('300', 'AVISO', "Intervalo para enviar mensagens keepalive."),
-        'ClientAliveCountMax': ('2', 'AVISO', "Número de mensagens keepalive sem resposta antes de desconectar."),
-        'PrintLastLog': ('yes', 'AVISO', "Exibir informações do último login."),
-        'TCPKeepAlive': ('yes', 'AVISO', "Manter conexão TCP ativa."),
-        'Ciphers': ('chacha20-poly1305@openssh.com,aes256-gcm@openssh.com,aes128-gcm@openssh.com', 'AVISO', "Cifras criptográficas fortes."),
-        'MACs': ('hmac-sha2-512-etm@openssh.com,hmac-sha2-256-etm@openssh.com', 'AVISO', "Algoritmos MAC fortes."),
-        'KexAlgorithms': ('sntrup761x25519-sha512@openssh.com,curve25519-sha256,curve25519-sha256@libssh.org,diffie-hellman-group16-sha512,diffie-hellman-group18-sha512,diffie-hellman-group14-sha256', 'AVISO', "Algoritmos de troca de chaves fortes."),
-        'IgnoreRhosts': ('yes', 'AVISO', "Ignorar arquivos .rhosts."),
-        'HostbasedAuthentication': ('no', 'AVISO', "Desabilitar autenticação baseada em host."),
-        'PermitUserEnvironment': ('no', 'AVISO', "Desabilitar permissão de ambiente de usuário."),
-        'ChallengeResponseAuthentication': ('no', 'AVISO', "Desabilitar autenticação de desafio/resposta."),
-        'UseDNS': ('no', 'AVISO', "Desabilitar lookup DNS reverso para evitar atrasos e spoofing."),
-        'GSSAPIAuthentication': ('no', 'AVISO', "Desabilitar autenticação GSSAPI se não for usado."),
-        'MaxStartups': ('10:30:100', 'AVISO', "Limitar conexões SSH simultâneas."),
-        'MaxSessions': ('10', 'AVISO', "Limitar sessões por conexão."),
-        'LogLevel': ('VERBOSE', 'AVISO', "Nível de log detalhado para auditoria."),
-        'StrictModes': ('yes', 'AVISO', "Forçar verificação de permissões de arquivos de chave."),
-        'Subsystem': ('sftp /usr/lib/openssh/sftp-server', 'FALHA', "Configuração correta do subsistema SFTP."),
-        'UsePAM': ('yes', 'DEBUG', "Habilitar PAM para autenticação."), # DEBUG para não aparecer no relatório final se OK
-        'PrintMotd': ('no', 'DEBUG', "Desabilitar exibição do MOTD."), # DEBUG para não aparecer no relatório final se OK
-    }
-
-    current_config = {}
-    for line in config_lines:
-        line = line.strip()
-        if not line or line.startswith('#'):
-            continue
-        parts = line.split(maxsplit=1)
-        if len(parts) == 2:
-            current_config[parts[0]] = parts[1]
-
-    for param, (recommended_value, risk_level, comment) in recommended_config.items():
-        if param in current_config:
-            if current_config[param] != recommended_value:
-                if risk_level != 'DEBUG':
-                    issues.append(f"❌ [{risk_level}] Parâmetro '{param}' configurado como '{current_config[param]}'. Recomendado: '{recommended_value}'. {comment}")
-                else:
-                    logging.debug(f"Parâmetro '{param}' está configurado corretamente como '{current_config[param]}'.")
-            else:
-                if risk_level != 'DEBUG':
-                    logging.debug(f"Parâmetro '{param}' está configurado corretamente como '{current_config[param]}'.")
-        else:
-            if risk_level != 'DEBUG':
-                issues.append(f"⚠️ [AVISO] Parâmetro '{param}' não encontrado ou comentado. Recomendado: '{recommended_value}'. {comment}")
-
-    return issues
-
-# --- Auditoria de Permissões de Arquivos SSH ---
-def audit_file_permissions():
-    """Audita as permissões de arquivos e diretórios SSH críticos."""
-    issues = []
-    # (Caminho, Permissões Esperadas (octal), Proprietário Esperado, Grupo Esperado)
-    ssh_files_perms = [
-        (SSHD_CONFIG, 0o600, 'root', 'root'),
-        ('/etc/ssh', 0o755, 'root', 'root'),
-        ('/etc/ssh/ssh_host_rsa_key', 0o600, 'root', 'root'),
-        ('/etc/ssh/ssh_host_rsa_key.pub', 0o644, 'root', 'root'),
-        ('/etc/ssh/ssh_host_ed25519_key', 0o600, 'root', 'root'),
-        ('/etc/ssh/ssh_host_ed25519_key.pub', 0o644, 'root', 'root'),
-        # Adicione outros arquivos de chave de host se existirem (e.g., ecdsa)
-    ]
-
-    for filepath, expected_perms, expected_owner, expected_group in ssh_files_perms:
-        if not os.path.exists(filepath):
-            issues.append(f"❌ [FALHA] Arquivo/Diretório '{filepath}' não encontrado.")
-            continue
-
-        try:
-            stat_info = os.stat(filepath)
-            current_perms = stat_info.st_mode & 0o777
-            current_owner = pwd.getpwuid(stat_info.st_uid).pw_name
-            current_group = grp.getgrgid(stat_info.st_gid).gr_name
-
-            if current_perms != expected_perms:
-                issues.append(f"❌ [FALHA] Permissões de '{filepath}' são 0o{current_perms:o}, esperado 0o{expected_perms:o}.")
-            else:
-                logging.debug(f"Permissões de '{filepath}' estão corretas.")
-
-            if current_owner != expected_owner:
-                issues.append(f"❌ [FALHA] Proprietário de '{filepath}' é '{current_owner}', esperado '{expected_owner}'.")
-            else:
-                logging.debug(f"Proprietário de '{filepath}' está correto.")
-
-            if current_group != expected_group:
-                issues.append(f"❌ [FALHA] Grupo de '{filepath}' é '{current_group}', esperado '{expected_group}'.")
-            else:
-                logging.debug(f"Grupo de '{filepath}' está correto.")
-
-        except FileNotFoundError:
-            issues.append(f"❌ [FALHA] Arquivo/Diretório '{filepath}' não encontrado durante auditoria de permissões.")
-        except KeyError: # Usuário/grupo não encontrado
-            issues.append(f"❌ [FALHA] Proprietário/Grupo de '{filepath}' (UID:{stat_info.st_uid}/GID:{stat_info.st_gid}) não encontrado no sistema.")
-        except Exception as e:
-            issues.append(f"❌ [FALHA] Erro ao auditar permissões de '{filepath}': {e}")
-    return issues
-
-# --- Auditoria de Fail2ban ---
-def audit_fail2ban():
-    """Verifica se o Fail2ban está instalado e ativo."""
-    try:
-        result = _run_command(['systemctl', 'is-active', 'fail2ban'], check=False, capture_output=True)
-        if result.stdout.strip() == 'active':
-            logging.debug("Fail2ban está ativo.")
-            return []
-        else:
-            return ["❌ [FALHA] Fail2ban NÃO está ativo. Recomenda-se instalá-lo e ativá-lo."]
-    except FileNotFoundError:
-        return ["❌ [FALHA] Fail2ban NÃO está instalado. Recomenda-se instalá-lo e ativá-lo."]
-    except Exception as e:
-        return [f"❌ [FALHA] Erro ao verificar status do Fail2ban: {e}"]
-
-# --- Correção de Configurações SSH ---
-def fix_ssh_config(dry_run=False):
-    """Aplica correções às configurações do sshd_config."""
-    logging.info("Iniciando correção de configurações SSH...")
-    if dry_run:
-        logging.info("Modo Dry-Run ativado. Nenhuma alteração será feita no sistema.")
-
-    config_lines = []
-    try:
-        with open(SSHD_CONFIG, 'r') as f:
-            config_lines = f.readlines()
-    except FileNotFoundError:
-        logging.error(f"Arquivo '{SSHD_CONFIG}' não encontrado. Não é possível corrigir.")
-        return False
-    except Exception as e:
-        logging.error(f"Erro ao ler '{SSHD_CONFIG}': {e}")
-        return False
-
-    # Dicionário de configurações a serem corrigidas/adicionadas
-    # (Parâmetro, Valor Recomendado, Comentário para adicionar se não existir)
-    corrections = {
-        'PermitRootLogin': 'no',
-        'PasswordAuthentication': 'no',
-        'PubkeyAuthentication': 'yes',
-        'PermitEmptyPasswords': 'no',
-        'Protocol': '2',
-        'X11Forwarding': 'no',
-        'AllowTcpForwarding': 'no',
-        'AllowAgentForwarding': 'no',
-        'MaxAuthTries': '3',
-        'LoginGraceTime': '30',
-        'ClientAliveInterval': '300',
-        'ClientAliveCountMax': '2',
-        'PrintLastLog': 'yes',
-        'TCPKeepAlive': 'yes',
-        'Ciphers': 'chacha20-poly1305@openssh.com,aes256-gcm@openssh.com,aes128-gcm@openssh.com',
-        'MACs': 'hmac-sha2-512-etm@openssh.com,hmac-sha2-256-etm@openssh.com',
-        'KexAlgorithms': 'sntrup761x25519-sha512@openssh.com,curve25519-sha256,curve25519-sha256@libssh.org,diffie-hellman-group16-sha512,diffie-hellman-group18-sha512,diffie-hellman-group14-sha256',
-        'IgnoreRhosts': 'yes',
-        'HostbasedAuthentication': 'no',
-        'PermitUserEnvironment': 'no',
-        'ChallengeResponseAuthentication': 'no',
-        'UseDNS': 'no',
-        'GSSAPIAuthentication': 'no',
-        'MaxStartups': '10:30:100',
-        'MaxSessions': '10',
-        'LogLevel': 'VERBOSE',
-        'StrictModes': 'yes',
-        'Subsystem': 'sftp /usr/lib/openssh/sftp-server', # Corrigir espaço extra
-    }
-
-    new_config_lines = []
-    modified_count = 0
-    added_count = 0
-
-    for param, recommended_value in corrections.items():
-        found = False
-        for i, line in enumerate(config_lines):
-            stripped_line = line.strip()
-            if stripped_line.startswith(param):
-                # Encontrou o parâmetro, verifica se está comentado
-                if stripped_line.startswith('#' + param):
-                    # Descomenta e corrige
-                    new_line = f"{param} {recommended_value}\n"
-                    if line != new_line:
-                        logging.info(f"Corrigindo: '{line.strip()}' para '{new_line.strip()}'")
-                        config_lines[i] = new_line
-                        modified_count += 1
-                elif stripped_line != f"{param} {recommended_value}":
-                    # Corrige o valor
-                    new_line = f"{param} {recommended_value}\n"
-                    logging.info(f"Corrigindo: '{line.strip()}' para '{new_line.strip()}'")
-                    config_lines[i] = new_line
-                    modified_count += 1
-                found = True
-                break
-        
-        if not found:
-            # Parâmetro não encontrado, adiciona ao final
-            new_line = f"{param} {recommended_value}\n"
-            logging.info(f"Adicionando: '{new_line.strip()}'")
-            config_lines.append(new_line)
-            added_count += 1
-
-    if modified_count == 0 and added_count == 0:
-        logging.info("Nenhuma alteração de configuração SSH necessária.")
+        shutil.copy2(backup_path, original_path)
+        log_event('backup_restored', f"Backup restaurado: {backup_path} -> {original_path}", {
+            'backup_file': backup_path,
+            'restored_to': original_path
+        }, level='WARNING')
         return True
+    except Exception as e:
+        logging.error(f"Falha ao restaurar backup '{backup_path}': {e}")
+        return False
 
-    if not dry_run:
-        backup_path = _backup_config(SSHD_CONFIG)
-        if not backup_path:
-            logging.error("Não foi possível criar backup, abortando correção de configurações.")
-            return False
-        try:
-            with open(SSHD_CONFIG, 'w') as f:
-                f.writelines(config_lines)
-            logging.info(f"Configurações SSH atualizadas em '{SSHD_CONFIG}'.")
-            return True
-        except Exception as e:
-            logging.error(f"Falha ao escrever em '{SSHD_CONFIG}': {e}")
-            return False
-    else:
-        logging.info(f"Dry-Run: {modified_count} configurações seriam corrigidas e {added_count} seriam adicionadas.")
-        return True
-
-# --- Correção de Permissões de Arquivos SSH ---
-def fix_file_permissions(dry_run=False):
-    """Aplica correções às permissões de arquivos e diretórios SSH críticos."""
-    logging.info("Iniciando correção de permissões de arquivos SSH...")
-    if dry_run:
-        logging.info("Modo Dry-Run ativado. Nenhuma alteração será feita no sistema.")
-
-    modified_count = 0
-    # (Caminho, Permissões Esperadas (octal), Proprietário Esperado, Grupo Esperado)
-    ssh_files_perms = [
-        (SSHD_CONFIG, 0o600, 'root', 'root'),
-        ('/etc/ssh', 0o755, 'root', 'root'),
-        ('/etc/ssh/ssh_host_rsa_key', 0o600, 'root', 'root'),
-        ('/etc/ssh/ssh_host_rsa_key.pub', 0o644, 'root', 'root'),
-        ('/etc/ssh/ssh_host_ed25519_key', 0o600, 'root', 'root'),
-        ('/etc/ssh/ssh_host_ed25519_key.pub', 0o644, 'root', 'root'),
-    ]
-
-    for filepath, expected_perms, expected_owner, expected_group in ssh_files_perms:
-        if not os.path.exists(filepath):
-            logging.warning(f"Arquivo/Diretório '{filepath}' não encontrado, ignorando correção de permissões.")
-            continue
-
-        try:
-            stat_info = os.stat(filepath)
-            current_perms = stat_info.st_mode & 0o777
-            current_owner = pwd.getpwuid(stat_info.st_uid).pw_name
-            current_group = grp.getgrgid(stat_info.st_gid).gr_name
-
-            needs_fix = False
-            if current_perms != expected_perms:
-                logging.info(f"Corrigindo permissões para '{filepath}' de 0o{current_perms:o} para 0o{expected_perms:o}...")
-                needs_fix = True
-            if current_owner != expected_owner or current_group != expected_group:
-                logging.info(f"Corrigindo proprietário/grupo para '{filepath}' de {current_owner}:{current_group} para {expected_owner}:{expected_group}...")
-                needs_fix = True
-            
-            if needs_fix:
-                if not dry_run:
-                    os.chmod(filepath, expected_perms)
-                    shutil.chown(filepath, user=expected_owner, group=expected_group)
-                    logging.info(f"Permissões de '{filepath}' corrigidas para 0o{expected_perms:o}, proprietário {expected_owner}:{expected_group}.")
-                else:
-                    logging.info(f"Dry-Run: Permissões de '{filepath}' seriam corrigidas para 0o{expected_perms:o}, proprietário {expected_owner}:{expected_group}.")
-                modified_count += 1
-
-        except Exception as e:
-            logging.error(f"Erro ao corrigir permissões de '{filepath}': {e}")
+def validate_sshd_config(config_path: str = SSHD_CONFIG) -> bool:
+    """Valida sintaxe do sshd_config usando sshd -t"""
+    logging.info(f"Validando sintaxe de '{config_path}'...")
+    result = run_command(['sshd', '-t', '-f', config_path], check=False)
     
-    if modified_count == 0:
-        logging.info("Nenhuma correção de permissão de arquivo SSH necessária.")
+    if result.returncode == 0:
+        logging.info("✅ Sintaxe do sshd_config válida")
+        return True
     else:
-        logging.info(f"{modified_count} problemas de permissão de arquivo SSH corrigidos.")
+        logging.error(f"❌ Sintaxe inválida no sshd_config:\n{result.stderr}")
+        return False
+
+def check_active_ssh_sessions() -> int:
+    """Verifica número de sessões SSH ativas"""
+    try:
+        result = run_command(['who'], check=False)
+        sessions = [line for line in result.stdout.split('\n') if 'pts/' in line]
+        return len(sessions)
+    except Exception:
+        return 0
+
+def restart_ssh_with_retry(max_retries: int = 3, retry_delay: int = 2) -> bool:
+    """Reinicia SSH com retry e rollback automático em caso de falha"""
+    logging.info("Reiniciando serviço SSH...")
+    
+    active_sessions = check_active_ssh_sessions()
+    if active_sessions > 0:
+        logging.warning(f"⚠️  ATENÇÃO: {active_sessions} sessão(ões) SSH ativa(s) detectada(s)")
+        logging.warning("⚠️  O restart pode desconectar usuários ativos")
+    
+    try:
+        run_command(['systemctl', 'restart', 'sshd'])
+    except Exception as e:
+        logging.error(f"Falha ao executar restart: {e}")
+        return False
+    
+    for attempt in range(1, max_retries + 1):
+        time.sleep(retry_delay * attempt)
+        
+        result = run_command(['systemctl', 'is-active', 'sshd'], check=False)
+        status = result.stdout.strip()
+        
+        if status == 'active':
+            log_event('ssh_restarted', "Serviço SSH reiniciado com sucesso", {
+                'attempts': attempt,
+                'status': status
+            })
+            return True
+        
+        logging.warning(f"Tentativa {attempt}/{max_retries}: SSH status = {status}")
+    
+    logging.error(f"❌ SSH não está ativo após {max_retries} tentativas")
+    return False
+
+def generate_secure_password(length: int = 20) -> str:
+    """Gera senha segura com requisitos de complexidade"""
+    letters = string.ascii_letters.replace('O', '').replace('l', '').replace('I', '')
+    digits = string.digits.replace('0', '').replace('1', '')
+    symbols = '!@#$%^&*()-_=+[]{}|;:,.<>?'
+    
+    password = [
+        random.choice(string.ascii_uppercase.replace('O', '').replace('I', '')),
+        random.choice(string.ascii_lowercase.replace('l', '')),
+        random.choice(digits),
+        random.choice(symbols)
+    ]
+    
+    all_chars = letters + digits + symbols
+    password.extend(random.choice(all_chars) for _ in range(length - 4))
+    
+    random.shuffle(password)
+    return ''.join(password)
+
+def validate_username(username: str) -> bool:
+    """Valida username segundo POSIX.1-2008"""
+    pattern = r'^[a-z_][a-z0-9_-]{0,31}$'
+    return bool(re.match(pattern, username))
+
+# --- Parser Robusto de sshd_config ---
+class SSHDConfigParser:
+    """Parser que suporta multilinhas e comentários"""
+    
+    def __init__(self, config_path: str = SSHD_CONFIG):
+        self.config_path = config_path
+        self.raw_lines = []
+        self.config = {}
+        self._parse()
+    
+    def _parse(self):
+        """Parse do arquivo com suporte a continuação de linha"""
+        try:
+            with open(self.config_path, 'r') as f:
+                self.raw_lines = f.readlines()
+        except FileNotFoundError:
+            logging.error(f"Arquivo '{self.config_path}' não encontrado")
+            return
+        
+        current_line = ""
+        for line in self.raw_lines:
+            stripped = line.strip()
+            
+            if not stripped or stripped.startswith('#'):
+                continue
+            
+            if '#' in stripped:
+                stripped = stripped.split('#')[0].strip()
+            
+            # Continuação de linha (backslash) - CORRIGIDO
+            if stripped.endswith("\\"):
+                current_line += stripped[:-1] + " "
+                continue
+            
+            current_line += stripped
+            
+            parts = current_line.split(maxsplit=1)
+            if len(parts) == 2:
+                param, value = parts
+                self.config[param] = value.strip()
+            
+            current_line = ""
+    
+    def get(self, param: str, default: str = None) -> Optional[str]:
+        """Retorna valor do parâmetro"""
+        return self.config.get(param, default)
+    
+    def has_param(self, param: str) -> bool:
+        """Verifica se parâmetro existe"""
+        return param in self.config
+    
+    def update_config(self, updates: Dict[str, str]) -> List[str]:
+        """Atualiza configurações mantendo idempotência"""
+        new_lines = []
+        updated_params = set()
+        
+        for line in self.raw_lines:
+            stripped = line.strip()
+            
+            if not stripped or stripped.startswith('#'):
+                new_lines.append(line)
+                continue
+            
+            parts = stripped.split(maxsplit=1)
+            if len(parts) < 1:
+                new_lines.append(line)
+                continue
+            
+            param = parts[0]
+            
+            if param in updates:
+                new_value = updates[param]
+                new_lines.append(f"{param} {new_value}\n")
+                updated_params.add(param)
+                logging.debug(f"Atualizado: {param} = {new_value}")
+            else:
+                new_lines.append(line)
+        
+        for param, value in updates.items():
+            if param not in updated_params:
+                new_lines.append(f"{param} {value}\n")
+                logging.debug(f"Adicionado: {param} = {value}")
+        
+        return new_lines
+
+# --- Auditoria ---
+def audit_ssh_config() -> List[Dict]:
+    """Audita configurações SSH contra CIS Benchmark"""
+    issues = []
+    parser = SSHDConfigParser()
+    
+    sftp_path = get_sftp_server_path()
+    config_to_check = CIS_COMPLIANT_CONFIG.copy()
+    config_to_check['Subsystem'] = (f'sftp {sftp_path}', 'MEDIUM', "Configuração correta do subsistema SFTP")
+    
+    for param, (recommended, severity, comment) in config_to_check.items():
+        current_value = parser.get(param)
+        
+        if current_value is None:
+            issues.append({
+                'type': 'missing',
+                'severity': severity,
+                'parameter': param,
+                'recommended': recommended,
+                'comment': comment
+            })
+        elif current_value != recommended:
+            issues.append({
+                'type': 'misconfigured',
+                'severity': severity,
+                'parameter': param,
+                'current': current_value,
+                'recommended': recommended,
+                'comment': comment
+            })
+    
+    return issues
+
+def audit_file_permissions() -> List[Dict]:
+    """Audita permissões de arquivos SSH críticos"""
+    issues = []
+    
+    critical_files = [
+        (SSHD_CONFIG, 0o600, 'root', 'root'),
+        (SSH_DIR, 0o755, 'root', 'root'),
+    ]
+    
+    for key_file in Path(SSH_DIR).glob('ssh_host_*_key'):
+        critical_files.append((str(key_file), 0o600, 'root', 'root'))
+        pub_key = f"{key_file}.pub"
+        if os.path.exists(pub_key):
+            critical_files.append((pub_key, 0o644, 'root', 'root'))
+    
+    for filepath, expected_perms, expected_owner, expected_group in critical_files:
+        if not os.path.exists(filepath):
+            issues.append({
+                'type': 'missing_file',
+                'severity': 'HIGH',
+                'path': filepath,
+                'comment': 'Arquivo crítico não encontrado'
+            })
+            continue
+        
+        try:
+            stat_info = os.stat(filepath)
+            current_perms = stat_info.st_mode & 0o777
+            current_owner = pwd.getpwuid(stat_info.st_uid).pw_name
+            current_group = grp.getgrgid(stat_info.st_gid).gr_name
+            
+            if current_perms != expected_perms:
+                issues.append({
+                    'type': 'wrong_permissions',
+                    'severity': 'HIGH',
+                    'path': filepath,
+                    'current': f"0o{current_perms:o}",
+                    'expected': f"0o{expected_perms:o}"
+                })
+            
+            if current_owner != expected_owner or current_group != expected_group:
+                issues.append({
+                    'type': 'wrong_ownership',
+                    'severity': 'HIGH',
+                    'path': filepath,
+                    'current': f"{current_owner}:{current_group}",
+                    'expected': f"{expected_owner}:{expected_group}"
+                })
+        
+        except Exception as e:
+            issues.append({
+                'type': 'audit_error',
+                'severity': 'MEDIUM',
+                'path': filepath,
+                'error': str(e)
+            })
+    
+    return issues
+
+def audit_host_keys() -> List[Dict]:
+    """Audita força das chaves de host SSH"""
+    issues = []
+    
+    for key_file in Path(SSH_DIR).glob('ssh_host_*_key.pub'):
+        try:
+            result = run_command(['ssh-keygen', '-l', '-f', str(key_file)])
+            output = result.stdout.strip()
+            
+            parts = output.split()
+            if len(parts) < 1:
+                continue
+            
+            key_size = int(parts[0])
+            key_type = parts[-1].strip('()')
+            
+            if key_type == 'RSA' and key_size < 3072:
+                issues.append({
+                    'type': 'weak_host_key',
+                    'severity': 'HIGH',
+                    'path': str(key_file),
+                    'key_type': key_type,
+                    'key_size': key_size,
+                    'comment': f"Chave RSA com {key_size} bits. NIST recomenda mínimo 3072 bits"
+                })
+        
+        except Exception as e:
+            logging.debug(f"Erro ao auditar chave {key_file}: {e}")
+    
+    return issues
+
+def audit_authorized_keys() -> List[Dict]:
+    """Audita permissões de authorized_keys de todos os usuários"""
+    issues = []
+    
+    try:
+        result = run_command(['getent', 'passwd'])
+        users = []
+        
+        for line in result.stdout.split('\n'):
+            if not line.strip():
+                continue
+            parts = line.split(':')
+            if len(parts) >= 6:
+                username = parts[0]
+                home_dir = parts[5]
+                users.append((username, home_dir))
+        
+        for username, home_dir in users:
+            auth_keys_path = os.path.join(home_dir, '.ssh', 'authorized_keys')
+            
+            if not os.path.exists(auth_keys_path):
+                continue
+            
+            try:
+                stat_info = os.stat(auth_keys_path)
+                current_perms = stat_info.st_mode & 0o777
+                current_owner = pwd.getpwuid(stat_info.st_uid).pw_name
+                
+                if current_perms not in [0o600, 0o400]:
+                    issues.append({
+                        'type': 'insecure_authorized_keys',
+                        'severity': 'CRITICAL',
+                        'path': auth_keys_path,
+                        'user': username,
+                        'current_perms': f"0o{current_perms:o}",
+                        'comment': 'authorized_keys deve ter permissões 0o600 ou 0o400'
+                    })
+                
+                if current_owner != username:
+                    issues.append({
+                        'type': 'wrong_authorized_keys_owner',
+                        'severity': 'CRITICAL',
+                        'path': auth_keys_path,
+                        'user': username,
+                        'current_owner': current_owner,
+                        'comment': f'authorized_keys deve pertencer a {username}'
+                    })
+            
+            except Exception as e:
+                logging.debug(f"Erro ao auditar {auth_keys_path}: {e}")
+    
+    except Exception as e:
+        logging.error(f"Erro ao auditar authorized_keys: {e}")
+    
+    return issues
+
+def audit_fail2ban() -> List[Dict]:
+    """Verifica status do Fail2ban"""
+    issues = []
+    
+    try:
+        result = run_command(['systemctl', 'is-active', 'fail2ban'], check=False)
+        if result.stdout.strip() != 'active':
+            issues.append({
+                'type': 'fail2ban_inactive',
+                'severity': 'HIGH',
+                'comment': 'Fail2ban não está ativo. Servidor vulnerável a brute-force'
+            })
+    except FileNotFoundError:
+        issues.append({
+            'type': 'fail2ban_missing',
+            'severity': 'HIGH',
+            'comment': 'Fail2ban não está instalado'
+        })
+    
+    return issues
+
+def generate_audit_report(all_issues: Dict[str, List[Dict]]) -> str:
+    """Gera relatório de auditoria formatado"""
+    report = []
+    report.append("=" * 80)
+    report.append("RELATÓRIO DE AUDITORIA SSH - ENTERPRISE EDITION")
+    report.append(f"Data: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    report.append(f"Servidor: {os.uname().nodename}")
+    report.append("=" * 80)
+    report.append("")
+    
+    total_issues = sum(len(issues) for issues in all_issues.values())
+    
+    if total_issues == 0:
+        report.append("✅ NENHUMA FALHA DETECTADA")
+        report.append("   Sistema em conformidade com CIS Benchmark")
+    else:
+        report.append(f"❌ TOTAL DE ISSUES: {total_issues}")
+        report.append("")
+        
+        severity_order = ['CRITICAL', 'HIGH', 'MEDIUM', 'LOW']
+        
+        for category, issues in all_issues.items():
+            if not issues:
+                continue
+            
+            report.append(f"\n{'─' * 80}")
+            report.append(f"CATEGORIA: {category.upper()}")
+            report.append(f"{'─' * 80}")
+            
+            sorted_issues = sorted(
+                issues,
+                key=lambda x: severity_order.index(x.get('severity', 'LOW'))
+            )
+            
+            for issue in sorted_issues:
+                severity = issue.get('severity', 'UNKNOWN')
+                issue_type = issue.get('type', 'unknown')
+                
+                emoji = {
+                    'CRITICAL': '🔴',
+                    'HIGH': '🟠',
+                    'MEDIUM': '🟡',
+                    'LOW': '🔵'
+                }.get(severity, '⚪')
+                
+                report.append(f"\n{emoji} [{severity}] {issue_type}")
+                
+                for key, value in issue.items():
+                    if key not in ['type', 'severity']:
+                        report.append(f"   {key}: {value}")
+    
+    report.append("\n" + "=" * 80)
+    return "\n".join(report)
+
+# --- Correções (Hardening) ---
+def fix_ssh_config(dry_run: bool = False) -> bool:
+    """Aplica correções no sshd_config"""
+    logging.info("Iniciando correção de configurações SSH...")
+    
+    if dry_run:
+        logging.info("🔍 MODO DRY-RUN: Simulação sem alterações reais")
+    
+    parser = SSHDConfigParser()
+    
+    sftp_path = get_sftp_server_path()
+    updates = {param: value for param, (value, _, _) in CIS_COMPLIANT_CONFIG.items()}
+    updates['Subsystem'] = f'sftp {sftp_path}'
+    
+    new_lines = parser.update_config(updates)
+    
+    if dry_run:
+        logging.info(f"Dry-Run: {len(updates)} parâmetros seriam atualizados")
+        return True
+    
+    backup_path = backup_config(SSHD_CONFIG)
+    if not backup_path:
+        logging.error("Não foi possível criar backup. Abortando correção.")
+        return False
+    
+    try:
+        with open(SSHD_CONFIG, 'w') as f:
+            f.writelines(new_lines)
+        
+        log_event('config_updated', f"Configuração SSH atualizada", {
+            'backup': backup_path,
+            'parameters_updated': len(updates)
+        })
+    except Exception as e:
+        logging.error(f"Falha ao escrever {SSHD_CONFIG}: {e}")
+        return False
+    
+    if not validate_sshd_config():
+        logging.error("❌ VALIDAÇÃO FALHOU: Restaurando backup...")
+        restore_backup(backup_path, SSHD_CONFIG)
+        return False
+    
     return True
 
-# --- Instalação e Configuração do Fail2ban ---
-def install_fail2ban(dry_run=False):
-    """Instala e configura o Fail2ban."""
-    logging.info("Verificando status do Fail2ban. Tentando instalar e configurar se necessário...")
+def fix_file_permissions(dry_run: bool = False) -> bool:
+    """Corrige permissões de arquivos SSH"""
+    logging.info("Iniciando correção de permissões...")
+    
     if dry_run:
-        logging.info("Modo Dry-Run ativado. Nenhuma alteração será feita no sistema.")
-
-    try:
-        # Verificar se já está ativo
-        status_result = _run_command(['systemctl', 'is-active', 'fail2ban'], check=False, capture_output=True)
-        if status_result.stdout.strip() == 'active':
-            logging.info("Fail2ban já está ativo. Nenhuma ação necessária.")
-            return True
+        logging.info("🔍 MODO DRY-RUN: Simulação sem alterações reais")
+    
+    issues = audit_file_permissions()
+    fixed_count = 0
+    
+    for issue in issues:
+        if issue['type'] == 'missing_file':
+            logging.warning(f"Arquivo ausente: {issue['path']}")
+            continue
         
-        # Verificar se está instalado
-        install_check = _run_command(['dpkg', '-s', 'fail2ban'], check=False, capture_output=True)
-        if install_check.returncode != 0:
-            logging.info("Fail2ban não está instalado. Iniciando instalação...")
-            if not dry_run:
-                _run_command(['apt-get', 'update', '-y'])
-                _run_command(['apt-get', 'install', 'fail2ban', '-y'])
-                logging.info("Fail2ban instalado com sucesso.")
-            else:
-                logging.info("Dry-Run: Fail2ban seria instalado.")
-        else:
-            logging.info("Fail2ban já está instalado.")
+        filepath = issue['path']
+        
+        try:
+            if issue['type'] == 'wrong_permissions':
+                expected_perms = int(issue['expected'], 8)
+                if not dry_run:
+                    os.chmod(filepath, expected_perms)
+                logging.info(f"Corrigido: {filepath} -> {issue['expected']}")
+                fixed_count += 1
+            
+            elif issue['type'] == 'wrong_ownership':
+                owner, group = issue['expected'].split(':')
+                if not dry_run:
+                    shutil.chown(filepath, user=owner, group=group)
+                logging.info(f"Corrigido: {filepath} -> {owner}:{group}")
+                fixed_count += 1
+        
+        except Exception as e:
+            logging.error(f"Erro ao corrigir {filepath}: {e}")
+    
+    if dry_run:
+        logging.info(f"Dry-Run: {fixed_count} permissões seriam corrigidas")
+    else:
+        logging.info(f"✅ {fixed_count} permissões corrigidas")
+    
+    return True
 
-        # Configurar Fail2ban para SSH
-        jail_local_path = "/etc/fail2ban/jail.d/sshd.local"
-        jail_config = """
-[sshd]
+def fix_authorized_keys(dry_run: bool = False) -> bool:
+    """Corrige permissões de authorized_keys"""
+    logging.info("Iniciando correção de authorized_keys...")
+    
+    if dry_run:
+        logging.info("🔍 MODO DRY-RUN: Simulação sem alterações reais")
+    
+    issues = audit_authorized_keys()
+    fixed_count = 0
+    
+    for issue in issues:
+        filepath = issue['path']
+        username = issue['user']
+        
+        try:
+            if issue['type'] == 'insecure_authorized_keys':
+                if not dry_run:
+                    os.chmod(filepath, 0o600)
+                logging.info(f"Corrigido: {filepath} -> 0o600")
+                fixed_count += 1
+            
+            elif issue['type'] == 'wrong_authorized_keys_owner':
+                if not dry_run:
+                    shutil.chown(filepath, user=username, group=username)
+                logging.info(f"Corrigido: {filepath} -> {username}:{username}")
+                fixed_count += 1
+        
+        except Exception as e:
+            logging.error(f"Erro ao corrigir {filepath}: {e}")
+    
+    if dry_run:
+        logging.info(f"Dry-Run: {fixed_count} authorized_keys seriam corrigidos")
+    else:
+        logging.info(f"✅ {fixed_count} authorized_keys corrigidos")
+    
+    return True
+
+# --- Fail2ban ---
+def install_fail2ban(dry_run: bool = False) -> bool:
+    """Instala e configura Fail2ban"""
+    logging.info("Verificando Fail2ban...")
+    
+    if dry_run:
+        logging.info("🔍 MODO DRY-RUN: Simulação sem alterações reais")
+    
+    try:
+        result = run_command(['systemctl', 'is-active', 'fail2ban'], check=False)
+        if result.stdout.strip() == 'active':
+            logging.info("✅ Fail2ban já está ativo")
+            return True
+    except FileNotFoundError:
+        pass
+    
+    distro = detect_distro()
+    
+    try:
+        if distro == 'debian':
+            if not dry_run:
+                run_command(['apt-get', 'update', '-y'])
+                run_command(['apt-get', 'install', 'fail2ban', '-y'])
+            logging.info("Fail2ban instalado (Debian)")
+        
+        elif distro == 'rhel':
+            if not dry_run:
+                run_command(['yum', 'install', 'epel-release', '-y'])
+                run_command(['yum', 'install', 'fail2ban', '-y'])
+            logging.info("Fail2ban instalado (RHEL)")
+        
+        else:
+            logging.warning(f"Distro '{distro}' não suportada para instalação automática")
+            return False
+    
+    except Exception as e:
+        logging.error(f"Erro ao instalar Fail2ban: {e}")
+        return False
+    
+    jail_config = """[sshd]
 enabled = true
 port = ssh
 filter = sshd
@@ -489,170 +872,222 @@ maxretry = 3
 bantime = 3600
 findtime = 600
 """
-        if not os.path.exists(jail_local_path):
-            logging.info(f"Criando arquivo de configuração '{jail_local_path}' para SSH...")
-            if not dry_run:
-                with open(jail_local_path, 'w') as f:
-                    f.write(jail_config)
-                logging.info(f"Arquivo '{jail_local_path}' criado.")
-            else:
-                logging.info(f"Dry-Run: Arquivo '{jail_local_path}' seria criado.")
-        else:
-            logging.info(f"Arquivo '{jail_local_path}' já existe. Verifique a configuração manualmente se necessário.")
-
-        # Habilitar e iniciar o serviço
-        if not dry_run:
-            _run_command(['systemctl', 'enable', 'fail2ban'])
-            _run_command(['systemctl', 'start', 'fail2ban'])
-            logging.info("Fail2ban habilitado e iniciado.")
-            # Verificar status novamente
-            status_result = _run_command(['systemctl', 'is-active', 'fail2ban'], check=False, capture_output=True)
-            if status_result.stdout.strip() == 'active':
-                logging.info("Fail2ban está ativo e configurado.")
-                return True
-            else:
-                logging.error(f"Fail2ban não está ativo após configuração. Status: {status_result.stdout.strip()}")
-                return False
-        else:
-            logging.info("Dry-Run: Fail2ban seria habilitado e iniciado.")
+    
+    jail_path = "/etc/fail2ban/jail.d/sshd.local"
+    
+    if not dry_run:
+        try:
+            with open(jail_path, 'w') as f:
+                f.write(jail_config)
+            logging.info(f"Configuração criada: {jail_path}")
+        except Exception as e:
+            logging.error(f"Erro ao criar {jail_path}: {e}")
+            return False
+        
+        run_command(['systemctl', 'enable', 'fail2ban'])
+        run_command(['systemctl', 'start', 'fail2ban'])
+        
+        result = run_command(['systemctl', 'is-active', 'fail2ban'], check=False)
+        if result.stdout.strip() == 'active':
+            logging.info("✅ Fail2ban ativo e configurado")
             return True
-
-    except Exception as e:
-        logging.error(f"Erro ao instalar/configurar Fail2ban: {e}")
-        return False
-
-# --- Criação de Usuário Sudo ---
-def create_sudo_user(username, dry_run=False):
-    """Cria um novo usuário com permissões sudo e senha segura."""
-    logging.info(f"Iniciando criação do usuário '{username}' com permissões sudo...")
-    if dry_run:
-        logging.info("Modo Dry-Run ativado. Nenhuma alteração será feita no sistema.")
+        else:
+            logging.error("❌ Fail2ban não está ativo após configuração")
+            return False
+    else:
+        logging.info("Dry-Run: Fail2ban seria instalado e configurado")
         return True
 
-    # 1. Verificar se o usuário já existe
+# --- Gerenciamento de Usuários ---
+def create_sudo_user(username: str, dry_run: bool = False) -> bool:
+    """Cria usuário com permissões sudo e senha segura"""
+    logging.info(f"Iniciando criação do usuário '{username}'...")
+    
+    if dry_run:
+        logging.info("🔍 MODO DRY-RUN: Simulação sem alterações reais")
+        return True
+    
+    if not validate_username(username):
+        logging.error(f"Username inválido: '{username}'")
+        logging.error("Formato válido: [a-z_][a-z0-9_-]{{0,31}}")
+        return False
+    
     try:
         pwd.getpwnam(username)
-        logging.warning(f"Usuário '{username}' já existe. Abortando criação.")
+        logging.error(f"Usuário '{username}' já existe")
         return False
     except KeyError:
-        pass # Usuário não existe, pode continuar
-
-    # 2. Gerar senha segura
-    password = _generate_secure_password()
-    hashed_password = crypt.crypt(password, crypt.mksalt(crypt.METHOD_SHA512))
-
-    logging.info(f"Gerando senha segura para '{username}'.")
-    logging.warning(f"ATENÇÃO: A senha para '{username}' é: {password}")
-    logging.warning("Por favor, salve esta senha em um local seguro. Ela não será exibida novamente.")
-
+        pass
+    
+    password = generate_secure_password()
+    
     try:
-        # 3. Criar usuário
-        logging.info(f"Criando usuário '{username}'...")
-        _run_command(['useradd', '-m', '-s', '/bin/bash', username])
-        logging.info(f"Usuário '{username}' criado.")
-
-        # 4. Definir senha
-        logging.info(f"Definindo senha para '{username}'...")
-        # Usar chpasswd para definir a senha de forma não interativa
-        _run_command(['chpasswd'], input=f"{username}:{password}\n", check=True)
-        logging.info(f"Senha definida para '{username}'.")
-
-        # 5. Adicionar ao grupo sudo
-        logging.info(f"Adicionando usuário '{username}' ao grupo 'sudo'...")
-        _run_command(['usermod', '-aG', 'sudo', username])
-        logging.info(f"Usuário '{username}' adicionado ao grupo 'sudo'.")
-
-        logging.info(f"Usuário '{username}' criado e configurado com sucesso.")
+        run_command(['useradd', '-m', '-s', '/bin/bash', username])
+        logging.info(f"Usuário '{username}' criado")
+        
+        run_command(['chpasswd'], input_data=f"{username}:{password}\n")
+        logging.info(f"Senha definida para '{username}'")
+        
+        distro = detect_distro()
+        sudo_group = 'sudo' if distro == 'debian' else 'wheel'
+        
+        run_command(['usermod', '-aG', sudo_group, username])
+        logging.info(f"Usuário '{username}' adicionado ao grupo '{sudo_group}'")
+        
+        print("\n" + "=" * 80)
+        print("🔐 CREDENCIAIS DO NOVO USUÁRIO SUDO")
+        print("=" * 80)
+        print(f"Username: {username}")
+        print(f"Password: {password}")
+        print("=" * 80)
+        print("⚠️  ATENÇÃO: Salve esta senha AGORA. Ela não será exibida novamente.")
+        print("=" * 80 + "\n")
+        
+        log_event('user_created', f"Usuário sudo criado: {username}", {
+            'username': username,
+            'sudo_group': sudo_group
+        })
+        
         return True
+    
     except Exception as e:
-        logging.error(f"Falha ao criar usuário '{username}': {e}")
-        # Tentar remover o usuário se a criação falhou em algum ponto
+        logging.error(f"Erro ao criar usuário '{username}': {e}")
+        
         try:
-            _run_command(['userdel', '-r', username], check=False)
-            logging.warning(f"Usuário '{username}' parcialmente criado foi removido.")
-        except Exception as e_del:
-            logging.error(f"Falha ao remover usuário '{username}' após erro: {e_del}")
+            run_command(['userdel', '-r', username], check=False)
+            logging.warning(f"Rollback: usuário '{username}' removido")
+        except Exception:
+            pass
+        
         return False
 
-# --- Função Principal ---
+# --- Main ---
 def main():
-    setup_logging()
-
     parser = argparse.ArgumentParser(
-        description="Script para auditoria e hardening de SSH com gerenciamento de usuários."
+        description=f"SSH Auditor and Hardening Tool v{VERSION}",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Exemplos de uso:
+  %(prog)s --audit                          # Auditoria completa
+  %(prog)s --fix --dry-run                  # Simular correções
+  %(prog)s --fix                            # Aplicar correções
+  %(prog)s --create-user admin_backup       # Criar usuário sudo
+  %(prog)s --install-fail2ban               # Instalar Fail2ban
+  %(prog)s --audit --fix --install-fail2ban # Auditoria + Hardening completo
+
+ATENÇÃO: Execute sempre com --dry-run primeiro em produção!
+        """
     )
-    parser.add_argument('--audit', action='store_true', help='Executa auditoria de segurança SSH.')
-    parser.add_argument('--fix', action='store_true', help='Aplica correções automáticas de hardening SSH.')
-    parser.add_argument('--dry-run', action='store_true', help='Simula correções sem aplicar (usar com --fix).')
-    parser.add_argument('--create-user', metavar='USERNAME', help='Cria um novo usuário com permissão sudo e senha segura.')
-    parser.add_argument('--install-fail2ban', action='store_true', help='Instala e configura o Fail2ban.')
-
+    
+    parser.add_argument('--audit', action='store_true',
+                        help='Executar auditoria de segurança SSH')
+    parser.add_argument('--fix', action='store_true',
+                        help='Aplicar correções de hardening')
+    parser.add_argument('--dry-run', action='store_true',
+                        help='Simular correções sem aplicar (usar com --fix)')
+    parser.add_argument('--create-user', metavar='USERNAME',
+                        help='Criar novo usuário com permissões sudo')
+    parser.add_argument('--install-fail2ban', action='store_true',
+                        help='Instalar e configurar Fail2ban')
+    parser.add_argument('--verbose', '-v', action='store_true',
+                        help='Modo verbose (debug)')
+    parser.add_argument('--version', action='version',
+                        version=f'%(prog)s {VERSION}')
+    
     args = parser.parse_args()
-
-    if not any(vars(args).values()):
-        logging.info("Nenhum argumento fornecido. Executando auditoria por padrão.")
+    
+    setup_logging(args.verbose)
+    
+    if os.geteuid() != 0:
+        logging.error("❌ Este script requer privilégios de root")
+        logging.error("   Execute com: sudo python3 ssh_auditor_enterprise.py")
+        sys.exit(1)
+    
+    if not any([args.audit, args.fix, args.create_user, args.install_fail2ban]):
         args.audit = True
-
-    audit_issues = []
-    fix_success = True
-
-    logging.info("Iniciando SSH Auditor e User Manager...")
-
-    # --- Auditoria ---
+    
+    logging.info(f"SSH Auditor and Hardening Tool v{VERSION}")
+    logging.info(f"Distro detectada: {detect_distro()}")
+    logging.info("=" * 80)
+    
+    success = True
+    
     if args.audit or args.fix:
-        logging.info("Iniciando auditoria de configurações SSH...")
-        audit_issues.extend(audit_ssh_config())
-        logging.info("Iniciando auditoria de permissões de arquivos SSH...")
-        audit_issues.extend(audit_file_permissions())
-        logging.info("Verificando status do Fail2ban...")
-        audit_issues.extend(audit_fail2ban())
-
-        logging.info("\n--- Relatório de Auditoria SSH ---")
-        if audit_issues:
-            for issue in audit_issues:
-                logging.info(issue)
-        else:
-            logging.info("✅ Nenhuma falha ou aviso crítico encontrado na auditoria SSH.")
-        logging.info("--- Fim do Relatório de Auditoria ---")
-
-    # --- Correção ---
-    if args.fix:
-        logging.info("Iniciando processo de correção...")
-        fix_success = fix_ssh_config(args.dry_run)
-        if fix_success:
-            fix_success = fix_file_permissions(args.dry_run)
+        logging.info("🔍 INICIANDO AUDITORIA...")
         
-        if fix_success and not args.dry_run:
-            if not _restart_ssh():
-                fix_success = False
-                logging.error("Falha ao reiniciar o serviço SSH após as correções.")
-            else:
-                logging.info("Correções aplicadas e serviço SSH reiniciado com sucesso.")
-        elif args.dry_run:
-            logging.info("Modo Dry-Run: As correções seriam aplicadas e o serviço SSH seria reiniciado.")
-
-    # --- Instalar Fail2ban ---
+        all_issues = {
+            'ssh_config': audit_ssh_config(),
+            'file_permissions': audit_file_permissions(),
+            'host_keys': audit_host_keys(),
+            'authorized_keys': audit_authorized_keys(),
+            'fail2ban': audit_fail2ban()
+        }
+        
+        report = generate_audit_report(all_issues)
+        print("\n" + report + "\n")
+        
+        report_path = f"/var/log/ssh_audit_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.txt"
+        try:
+            with open(report_path, 'w') as f:
+                f.write(report)
+            logging.info(f"📄 Relatório salvo em: {report_path}")
+        except Exception as e:
+            logging.warning(f"Não foi possível salvar relatório: {e}")
+    
+    if args.fix:
+        logging.info("\n🔧 INICIANDO CORREÇÕES...")
+        
+        if args.dry_run:
+            logging.info("🔍 MODO DRY-RUN ATIVADO")
+        
+        if not fix_ssh_config(args.dry_run):
+            logging.error("❌ Falha ao corrigir configurações SSH")
+            success = False
+        
+        if not fix_file_permissions(args.dry_run):
+            logging.error("❌ Falha ao corrigir permissões")
+            success = False
+        
+        if not fix_authorized_keys(args.dry_run):
+            logging.error("❌ Falha ao corrigir authorized_keys")
+            success = False
+        
+        if not args.dry_run and success:
+            if not restart_ssh_with_retry():
+                logging.error("❌ FALHA CRÍTICA: SSH não reiniciou corretamente")
+                logging.error("   Verifique o serviço manualmente: systemctl status sshd")
+                
+                backups = sorted(Path(BACKUP_DIR).glob('sshd_config.bak_*'))
+                if backups:
+                    latest_backup = str(backups[-1])
+                    logging.warning(f"⚠️  Tentando restaurar backup: {latest_backup}")
+                    if restore_backup(latest_backup, SSHD_CONFIG):
+                        logging.warning("   Backup restaurado. Tentando reiniciar novamente...")
+                        restart_ssh_with_retry()
+                
+                success = False
+    
     if args.install_fail2ban:
-        fix_success = install_fail2ban(args.dry_run)
-        if not fix_success:
-            logging.error("Falha ao instalar/configurar Fail2ban.")
-
-    # --- Criar Usuário ---
+        logging.info("\n🛡️  CONFIGURANDO FAIL2BAN...")
+        if not install_fail2ban(args.dry_run):
+            logging.error("❌ Falha ao configurar Fail2ban")
+            success = False
+    
     if args.create_user:
-        if not args.create_user.isalnum():
-            logging.error("Nome de usuário inválido. Use apenas caracteres alfanuméricos.")
-            fix_success = False
-        else:
-            fix_success = create_sudo_user(args.create_user, args.dry_run)
-            if not fix_success:
-                logging.error(f"Falha ao criar usuário '{args.create_user}'.")
-
-    if fix_success:
-        logging.info("Processo concluído com sucesso.")
+        logging.info("\n👤 CRIANDO USUÁRIO SUDO...")
+        if not create_sudo_user(args.create_user, args.dry_run):
+            logging.error(f"❌ Falha ao criar usuário '{args.create_user}'")
+            success = False
+    
+    logging.info("\n" + "=" * 80)
+    if success:
+        logging.info("✅ PROCESSO CONCLUÍDO COM SUCESSO")
     else:
-        logging.error("Processo concluído com falhas.")
-
-    logging.info("SSH Auditor e User Manager finalizado.")
+        logging.error("❌ PROCESSO CONCLUÍDO COM FALHAS")
+        logging.error("   Verifique os logs em: " + LOG_FILE)
+    logging.info("=" * 80)
+    
+    sys.exit(0 if success else 1)
 
 if __name__ == "__main__":
     main()
