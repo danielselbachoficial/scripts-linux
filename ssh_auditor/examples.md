@@ -2,7 +2,7 @@
 
 **Exemplo 1: Auditoria Inicial**
 
-`bash
+```bash
 sudo python3 ssh_auditor_v2.py --audit --verbose
 `
 
@@ -10,7 +10,7 @@ sudo python3 ssh_auditor_v2.py --audit --verbose
 
 **Saída:**
 
-`bash
+```bash
 ================================================================================
 
 RELATÓRIO DE AUDITORIA SSH - ENTERPRISE EDITION
@@ -64,7 +64,7 @@ sudo python3 ssh_auditor_v2.py --fix --dry-run
 
 
 **Saída:**
-`bash
+```bash
 [2025-12-24 19:05:00] [INFO] 🔍 MODO DRY-RUN ATIVADO
 
 [2025-12-24 19:05:00] [INFO] Iniciando correção de configurações SSH...
@@ -94,7 +94,7 @@ sudo python3 ssh_auditor_v2.py --fix
 
 **Saída:**
 
-`bash
+```bash
 [2025-12-24 19:10:00] [INFO] Iniciando correção de configurações SSH...
 
 [2025-12-24 19:10:00] [INFO] Backup criado: /var/backups/ssh_auditor/sshd_config.bak_20251224_191000
@@ -122,7 +122,7 @@ sudo python3 ssh_auditor_v2.py --create-user admin_backup
 
 **Saída:**
 
-`bash
+```bash
 [2025-12-24 19:15:00] [INFO] Usuário 'admin_backup' criado
 
 [2025-12-24 19:15:00] [INFO] Senha definida para 'admin_backup'
