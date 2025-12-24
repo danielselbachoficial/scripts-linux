@@ -84,7 +84,7 @@ sudo python3 ssh_auditor_v2.py --fix --dry-run
 
 IMPORTANTE: Ter acesso alternativo ao servidor!
 
-`bash
+`
 sudo python3 ssh_auditor_v2.py --fix
 `
 
