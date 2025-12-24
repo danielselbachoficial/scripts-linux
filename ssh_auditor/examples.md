@@ -56,7 +56,7 @@ CATEGORIA: SSH_CONFIG
 ---
 
 **Exemplo 2: Dry-Run**
-`bash
+`
 sudo python3 ssh_auditor_v2.py --fix --dry-run
 `
 
