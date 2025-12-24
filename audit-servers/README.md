@@ -1,6 +1,6 @@
 # SSH Auditor and Hardening Tool - Enterprise Edition
 
-[![Version](https://img.shields.io/badge/version-2.0.0-blue.svg)](https://github.com/seu-usuario/ssh-auditor)
+[![Version](https://img.shields.io/badge/version-1.0.0-blue.svg)](https://github.com/seu-usuario/ssh-auditor)
 [![Python](https://img.shields.io/badge/python-3.8+-green.svg)](https://www.python.org/)
 [![License](https://img.shields.io/badge/license-MIT-orange.svg)](LICENSE)
 [![CIS Benchmark](https://img.shields.io/badge/CIS-5.2.x-red.svg)](https://www.cisecurity.org/)
