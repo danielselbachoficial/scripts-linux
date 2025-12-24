@@ -1,4 +1,4 @@
-# SSH Auditor e Hardening
+# SSH AUDITOR ENTERPRISE
 
 ## 📋 RESUMO EXECUTIVO
 
