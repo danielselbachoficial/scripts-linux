@@ -4,6 +4,7 @@
 sudo python3 ssh_auditor_v2.py --audit --verbose
 `
 
+---
 **Saída:**
 
 ```bash
