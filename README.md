@@ -12,21 +12,19 @@ Uma coleção de ferramentas de automação, hardening e deploy para profissiona
 ### 🌐 Infra & NOC (/services-noc)
 Focado em serviços essenciais para gestão de infraestrutura de rede.
 
-NetBox: Deploy automatizado com foco em segurança máxima (IPAM/DCIM).
+- **NetBox:** Deploy automatizado com foco em segurança máxima (IPAM/DCIM).
 
 ### 🛡️ Cybersecurity & Hardening (/security)
 Scripts para elevar o nível de segurança do sistema operacional.
 
-OS Hardening: Configurações de kernel, limites de processo e permissões.
-
-Network Defense: Configuração de UFW, Fail2ban e políticas de TLS.
+- **OS Hardening:** Configurações de kernel, limites de processo e permissões.
+- **Network Defense:** Configuração de UFW, Fail2ban e políticas de TLS.
 
 ### ⚙️ Administração de Sistemas (/sysadmin)
 Utilitários de manutenção e automação de rotinas.
 
-Backups: Scripts para dumps de BD e sincronização off-site.
-
-Performance: Monitoramento de recursos e limpeza de logs.
+- **Backups:** Scripts para dumps de BD e sincronização off-site.
+- **Performance:** Monitoramento de recursos e limpeza de logs.
 
 ## 🤝 Contribuição e Licença
 Este projeto é Open Source sob a Licença MIT. Contribuições de novos scripts de monitoramento, segurança ou administração são bem-vindas. Consulte o CONTRIBUTING.md para detalhes.
