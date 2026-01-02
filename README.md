@@ -25,6 +25,3 @@ Utilitários de manutenção e automação de rotinas.
 
 - **Backups:** Scripts para dumps de BD e sincronização off-site.
 - **Performance:** Monitoramento de recursos e limpeza de logs.
-
-## 🤝 Contribuição e Licença
-Este projeto é Open Source sob a Licença MIT. Contribuições de novos scripts de monitoramento, segurança ou administração são bem-vindas. Consulte o CONTRIBUTING.md para detalhes.
